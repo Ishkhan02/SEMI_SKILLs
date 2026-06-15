@@ -1,6 +1,6 @@
 ---
 name: test-log-analyzer
-description: Analyze semiconductor .std / .stdf test logs and return a concise engineering summary directly in chat, plus a normalized CSV file. Use this skill for yield review, fail count analysis, top failing tests ranking, site-based failure patterns, and first-pass root-cause guidance.
+description: Analyze semiconductor .std / .stdf test logs and return a concise engineering summary directly in chat. Use this skill for std file analysis, yield review, fail count analysis, top failing tests ranking, site-based failure patterns, and first-pass root-cause guidance.
 license: Apache-2.0
 compatibility: Requires python3, pandas, and pystdf.
 metadata:
@@ -11,7 +11,6 @@ metadata:
     - std
     - stdf
   primary-output: chat-summary
-  secondary-output: csv
 ---
 
 # Test Log Analyzer
