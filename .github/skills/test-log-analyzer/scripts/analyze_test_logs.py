@@ -4,10 +4,8 @@
 Analyze STDF test log files and produce yield/failure summary
 """
 
-import argparse
 import math
 import json
-import re
 from io import StringIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -15,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 # Configuration
-DEFAULT_INPUT_FILE = Path(r"C:\Users\igevorgy\Desktop\SEMI_SKILLs\File\1YUSK83G_001_S11P_N_20260526194205_M6251A0022AKX12NIA_T4C03.std")
+INPUT_FILE = Path(r"C:\Users\igevorgy\Desktop\SEMI_SKILLs\File\1YUSK83G_001_S11P_N_20260526194205_M6251A0022AKX12NIA_T4C03.std")
 TOP_N = 10
 
 
@@ -33,150 +31,6 @@ def parse_int(value: object) -> Optional[int]:
     if math.isnan(f):
         return None
     return int(round(f))
-
-
-def parse_coordinate_value(value: object) -> Optional[float]:
-    if value is None or str(value).strip() == "":
-        return None
-    try:
-        return float(str(value).strip())
-    except Exception:
-        return None
-
-
-def parse_coordinate_string(field_text: str) -> Dict[str, Optional[float]]:
-    coords = {"row": None, "col": None, "die": None, "x": None, "y": None}
-    if not field_text or not isinstance(field_text, str):
-        return coords
-
-    text = field_text.strip()
-    patterns = {
-        "row": re.compile(r"\b(?:row|row_num|rowid|r)\b[:=]?\s*([+-]?\d+)", re.IGNORECASE),
-        "col": re.compile(r"\b(?:col|col_num|column|c)\b[:=]?\s*([+-]?\d+)", re.IGNORECASE),
-        "die": re.compile(r"\b(?:die|die_num|dieid)\b[:=]?\s*([+-]?\d+)", re.IGNORECASE),
-        "x": re.compile(r"\b(?:x|x_coord|xcoordinate|xpos)\b[:=]?\s*([+-]?\d+\.?\d*)", re.IGNORECASE),
-        "y": re.compile(r"\b(?:y|y_coord|ycoordinate|ypos)\b[:=]?\s*([+-]?\d+\.?\d*)", re.IGNORECASE),
-    }
-
-    for name, regex in patterns.items():
-        match = regex.search(text)
-        if match:
-            coords[name] = parse_coordinate_value(match.group(1))
-
-    # Detect row/col pairs in compact form like R3C2 or R3 C2
-    match = re.search(r"\bR(\d+)\s*[Cc](\d+)\b", text, re.IGNORECASE)
-    if match:
-        coords["row"] = parse_coordinate_value(match.group(1))
-        coords["col"] = parse_coordinate_value(match.group(2))
-
-    # Detect XY pairs in a single string
-    match = re.search(r"\bX[:=\s]*([+-]?\d+\.?\d*)[\s,;]+Y[:=\s]*([+-]?\d+\.?\d*)\b", text, re.IGNORECASE)
-    if match:
-        coords["x"] = parse_coordinate_value(match.group(1))
-        coords["y"] = parse_coordinate_value(match.group(2))
-
-    return coords
-
-
-def extract_coordinates_from_payload(payload: List[str]) -> Dict[str, Optional[float]]:
-    coords = {"row": None, "col": None, "die": None, "x": None, "y": None}
-
-    for i, field in enumerate(payload):
-        if isinstance(field, str):
-            parsed = parse_coordinate_string(field)
-            for name, value in parsed.items():
-                if value is not None:
-                    coords[name] = value
-
-        next_value = None
-        if i + 1 < len(payload) and isinstance(payload[i + 1], str):
-            next_value = parse_coordinate_value(payload[i + 1])
-
-        field_lower = str(field).strip().lower()
-        if next_value is not None:
-            if field_lower in {"row", "row_num", "rowid", "r"}:
-                coords["row"] = next_value
-            elif field_lower in {"col", "col_num", "column", "c"}:
-                coords["col"] = next_value
-            elif field_lower in {"die", "die_num", "dieid"}:
-                coords["die"] = next_value
-            elif field_lower in {"x", "x_coord", "xcoordinate", "xpos"}:
-                coords["x"] = next_value
-            elif field_lower in {"y", "y_coord", "ycoordinate", "ypos"}:
-                coords["y"] = next_value
-
-    return coords
-
-
-def detect_coordinate_fields(lines: List[str]) -> Dict[str, object]:
-    coordinate_name_patterns = re.compile(r"\b(x|y|row|col|coordinate|coord|site|die)\b", re.IGNORECASE)
-    coordinate_names = set()
-    coordinate_records = 0
-
-    for line in lines:
-        if "|" not in line:
-            continue
-        fields = line.split("|")
-        # Detect coordinate-related field names in record payloads
-        for field in fields:
-            if coordinate_name_patterns.search(field):
-                coordinate_names.add(field.strip())
-
-        # Recognize coordinate-like numeric pairs in PTR/FTR/PRR records
-        rec_type = fields[0].strip().upper()
-        if rec_type in {"PTR", "FTR", "PRR", "PIR"}:
-            numeric_fields = []
-            for f in fields[1:]:
-                try:
-                    numeric_fields.append(float(f))
-                except Exception:
-                    numeric_fields.append(None)
-            for i in range(len(numeric_fields) - 1):
-                a = numeric_fields[i]
-                b = numeric_fields[i + 1]
-                if a is None or b is None:
-                    continue
-                if -10000.0 < a < 10000.0 and -10000.0 < b < 10000.0:
-                    if abs(a) >= 0.01 or abs(b) >= 0.01:
-                        coordinate_records += 1
-                        break
-
-    return {
-        "coordinate_detected": bool(coordinate_names),
-        "coordinate_names": sorted(coordinate_names),
-        "coordinate_records": coordinate_records,
-    }
-
-
-def collect_coordinate_stats(rows: List[Dict]) -> Dict[str, object]:
-    coordinate_names = set()
-    coordinate_records = 0
-
-    for row in rows:
-        has_any = False
-        if row.get("coord_row") is not None:
-            coordinate_names.add("ROW")
-            has_any = True
-        if row.get("coord_col") is not None:
-            coordinate_names.add("COL")
-            has_any = True
-        if row.get("coord_die") is not None:
-            coordinate_names.add("DIE")
-            has_any = True
-        if row.get("coord_x") is not None:
-            coordinate_names.add("X_COORD")
-            has_any = True
-        if row.get("coord_y") is not None:
-            coordinate_names.add("Y_COORD")
-            has_any = True
-        if has_any:
-            coordinate_records += 1
-
-    return {
-        "coordinate_detected": bool(coordinate_names),
-        "coordinate_names": sorted(coordinate_names),
-        "coordinate_records": coordinate_records,
-    }
 
 
 def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
@@ -242,13 +96,6 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
             soft_bin = parse_int(payload[5] if len(payload) > 5 else None)
             test_time = parse_float(payload[8] if len(payload) > 8 else None)
             part_id = payload[9] if len(payload) > 9 and payload[9] else None
-            coords = extract_coordinates_from_payload(payload)
-            explicit_x = parse_coordinate_value(payload[6] if len(payload) > 6 else None)
-            explicit_y = parse_coordinate_value(payload[7] if len(payload) > 7 else None)
-            if explicit_x is not None:
-                coords["x"] = explicit_x
-            if explicit_y is not None:
-                coords["y"] = explicit_y
 
             if part_id is None or part_id == "":
                 part_id = active_part_by_site.get(site_num)
@@ -272,11 +119,6 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
                 "soft_bin": soft_bin,
                 "status": status,
                 "source_record": "PRR",
-                "coord_row": coords.get("row"),
-                "coord_col": coords.get("col"),
-                "coord_die": coords.get("die"),
-                "coord_x": coords.get("x"),
-                "coord_y": coords.get("y"),
             })
             continue
 
@@ -291,7 +133,6 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
             units = payload[14] if len(payload) > 14 else ""
             lo_spec = payload[18] if len(payload) > 18 else ""
             hi_spec = payload[19] if len(payload) > 19 else ""
-            coords = extract_coordinates_from_payload(payload)
 
             part_id = active_part_by_site.get(site_num)
             if part_id is None:
@@ -323,11 +164,6 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
                 "soft_bin": pd.NA,
                 "status": "FAIL" if fail else "PASS",
                 "source_record": "PTR",
-                "coord_row": coords.get("row"),
-                "coord_col": coords.get("col"),
-                "coord_die": coords.get("die"),
-                "coord_x": coords.get("x"),
-                "coord_y": coords.get("y"),
             })
             continue
 
@@ -336,13 +172,6 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
             test_num = payload[0] if len(payload) > 0 else None
             site_num = payload[2] if len(payload) > 2 else "unknown"
             test_name = payload[22] if len(payload) > 22 and payload[22] else f"FTR_{test_num or 'UNKNOWN'}"
-            coords = extract_coordinates_from_payload(payload)
-            explicit_x = parse_coordinate_value(payload[9] if len(payload) > 9 else None)
-            explicit_y = parse_coordinate_value(payload[10] if len(payload) > 10 else None)
-            if explicit_x is not None:
-                coords["x"] = explicit_x
-            if explicit_y is not None:
-                coords["y"] = explicit_y
 
             part_id = active_part_by_site.get(site_num)
             if part_id is None:
@@ -363,24 +192,14 @@ def parse_stdf(stdf_path: Path) -> Tuple[pd.DataFrame, Dict]:
                 "soft_bin": pd.NA,
                 "status": "FAIL",
                 "source_record": "FTR",
-                "coord_row": coords.get("row"),
-                "coord_col": coords.get("col"),
-                "coord_die": coords.get("die"),
-                "coord_x": coords.get("x"),
-                "coord_y": coords.get("y"),
             })
             continue
 
     if not rows:
         raise ValueError("No test data (PTR/FTR/PRR) extracted from STDF file")
 
-    coord_info = collect_coordinate_stats(rows)
     norm_df = pd.DataFrame(rows)
-    return norm_df, {
-        "backend": "pystdf",
-        "ignored_rows": len(lines) - len(rows),
-        "coordinate_info": coord_info,
-    }
+    return norm_df, {"backend": "pystdf", "ignored_rows": len(lines) - len(rows)}
 
 
 def compute_metrics(df: pd.DataFrame) -> Dict:
@@ -498,48 +317,6 @@ def build_potential_causes(metrics: Dict) -> str:
     return "\n".join(lines)
 
 
-def build_coordinate_pattern_analysis(metrics: Dict, info: Dict) -> str:
-    coord_info = info.get("coordinate_info", {})
-    lines: List[str] = []
-
-    if coord_info.get("coordinate_detected"):
-        lines.append("- Coordinate fields were detected in the STDF file.")
-        coordinate_names = coord_info.get("coordinate_names", [])
-        if coordinate_names:
-            lines.append(f"- Coordinate-related fields found: {', '.join(coordinate_names)}.")
-
-        if metrics["site_failures"]:
-            top_site, top_site_count = max(metrics["site_failures"].items(), key=lambda x: x[1])
-            total_fails = sum(metrics["site_failures"].values())
-            if top_site_count / total_fails >= 0.6:
-                lines.append(f"- Failures are concentrated at Site {top_site}, suggesting a local coordinate/site cluster.")
-            else:
-                lines.append("- Failures are spread across multiple sites, suggesting a broader or scattered coordinate pattern.")
-        else:
-            lines.append("- No failing-site pattern could be derived from the available records.")
-
-        if coord_info.get("coordinate_records", 0) > 0:
-            lines.append(f"- {coord_info['coordinate_records']} coordinate-like records were observed during parsing.")
-
-        return "\n".join(lines)
-
-    # Fallback to site-level pattern analysis when explicit coordinate fields are absent.
-    if metrics["site_failures"]:
-        total_fails = sum(metrics["site_failures"].values())
-        top_site, top_site_count = max(metrics["site_failures"].items(), key=lambda x: x[1])
-        trend = (
-            f"- Failures are concentrated at Site {top_site}, indicating a local site/hardware cluster."
-            if top_site_count / total_fails >= 0.6
-            else "- Failures are distributed across multiple sites, indicating a broader or scattered spatial pattern."
-        )
-        lines.append("- No explicit X/Y coordinate fields were detected in this STDF file.")
-        lines.append(trend)
-        lines.append("- Site-level failure distribution is the available spatial pattern for this data.")
-        return "\n".join(lines)
-
-    return "- Coordinate analysis unavailable. No coordinate or site spatial data is available in this STDF file."
-
-
 def build_first_checks(metrics: Dict) -> str:
     if metrics["total_parts"] == 0:
         return "- N/A"
@@ -588,31 +365,21 @@ def generate_report(df: pd.DataFrame, metrics: Dict, info: Dict, input_file: Pat
     report = report.replace("{{yield_percent}}", str(metrics.get("yield_pct", "N/A")))
     report = report.replace("{{passing_parts}}", str(metrics.get("passing_parts", "N/A")))
     report = report.replace("{{failing_parts}}", str(metrics.get("failing_parts", "N/A")))
+    report = report.replace("{{failed_test_events}}", str(metrics.get("failed_events", "N/A")))
     report = report.replace("{{top_failing_tests_bullets}}", top_failing_tests_bullets)
-    report = report.replace("{{top_failing_sites_bullets}}", site_failure_bullets)
-    report = report.replace("{{coordinate_pattern_analysis}}", build_coordinate_pattern_analysis(metrics, info))
+    report = report.replace("{{site_failure_bullets}}", site_failure_bullets)
+    report = report.replace("{{initial_interpretation}}", build_top_level_interpretation(metrics))
+    report = report.replace("{{potential_causes}}", build_potential_causes(metrics))
+    report = report.replace("{{first_checks}}", build_first_checks(metrics))
+    report = report.replace("{{next_actions}}", build_next_actions(metrics))
+    report = report.replace("{{assumptions_notes}}", build_assumptions(metrics, info))
 
     report = report + "\n"
     return report
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze a semiconductor STDF file and generate a summary report.")
-    parser.add_argument(
-        "input_file",
-        nargs="?",
-        default=str(DEFAULT_INPUT_FILE),
-        help="Path to the STDF file to analyze.",
-    )
-    return parser.parse_args()
-
-
 def main():
-    args = parse_args()
-    input_file = Path(args.input_file)
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-
+    input_file = INPUT_FILE
     df, info = parse_stdf(input_file)
     metrics = compute_metrics(df)
     report = generate_report(df, metrics, info, input_file)
